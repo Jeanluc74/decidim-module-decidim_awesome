@@ -23,38 +23,44 @@ module Decidim
 
           # replace normal method to draw the editor
           def text_editor_for_proposal_body(form)
-            custom_fields = awesome_proposal_custom_fields
+            custom_fields = awesome_proposal_custom_fields_for(:body)
+            custom_private_fields = awesome_proposal_custom_fields_for(:private_body)
 
-            return decidim_text_editor_for_proposal_body(form) if custom_fields.blank?
+            content = if custom_fields.empty?
+                        decidim_text_editor_for_proposal_body(form)
+                      else
+                        render_proposal_custom_fields_override(custom_fields, form, :body)
+                      end
 
-            render_proposal_custom_fields_override(custom_fields, form, :body)
+            unless custom_private_fields.empty?
+              content = content_tag("div", content)
+              content += content_tag("div", render_proposal_custom_fields_override(custom_private_fields, form, :private_body))
+            end
+            content
           end
 
           # replace admin method to draw the editor (multi lang)
           def admin_editor_for_proposal_body(form)
-            custom_fields = awesome_proposal_custom_fields
+            custom_fields = awesome_proposal_custom_fields_for(:body)
 
-            return form.translated(:editor, :body, hashtaggable: true) if custom_fields.blank?
+            return if custom_fields.empty?
 
             locales = form.send(:locales)
-
             return render_proposal_custom_fields_override(custom_fields, form, "body_#{locales.first}", locales.first) if locales.length == 1
 
             tabs_id = form.send(:sanitize_tabs_selector, form.options[:tabs_id] || "#{form.object_name}-body-tabs")
 
             label_tabs = form.content_tag(:div, class: "label--tabs") do
-              field_label = form.send(:label_i18n, "body", form.label_for("proposal_custom_fields"))
-
               language_selector = "".html_safe
               language_selector = form.create_language_selector(locales, tabs_id, "body") if form.options[:label] != false
 
-              safe_join [field_label, language_selector]
+              safe_join [content_tag("label"), language_selector]
             end
 
             tabs_content = form.content_tag(:div, class: "tabs-content", data: { tabs_content: tabs_id }) do
               locales.each_with_index.inject("".html_safe) do |string, (locale, index)|
                 tab_content_id = "#{tabs_id}-body-panel-#{index}"
-                string + content_tag(:div, class: form.send(:tab_element_class_for, "panel", index), id: tab_content_id) do
+                string + content_tag(:div, class: form.send(:tab_element_class_for, "panel", index), id: tab_content_id, "aria-hidden": index.zero? ? "false" : "true") do
                   render_proposal_custom_fields_override(custom_fields, form, "body_#{locale}", locale)
                 end
               end
@@ -63,19 +69,55 @@ module Decidim
             safe_join [label_tabs, tabs_content]
           end
 
-          def render_proposal_custom_fields_override(fields, form, name, locale = nil)
-            custom_fields = Decidim::DecidimAwesome::CustomFields.new(fields)
+          def render_proposal_custom_fields_override(custom_fields, form, name, locale = nil)
             custom_fields.translate!
 
-            body = if form_presenter.proposal.body.is_a?(Hash) && locale.present?
-                     form_presenter.body(extras: false, all_locales: true).with_indifferent_access[locale]
-                   else
-                     form_presenter.body(extras: false)
-                   end
+            body = extract_body_content(name, locale)
+            apply_custom_fields(custom_fields, body, form, name)
 
-            custom_fields.apply_xml(body) if body.present?
-            form.object.errors.add(name, custom_fields.errors) if custom_fields.errors
             render partial: "decidim/decidim_awesome/custom_fields/form_render", locals: { spec: custom_fields.to_json, form: form, name: name }
+          end
+
+          def awesome_proposal_custom_fields_for(name)
+            if name == :private_body
+              Decidim::DecidimAwesome::CustomFields.new(awesome_proposal_private_custom_fields)
+            else
+              Decidim::DecidimAwesome::CustomFields.new(awesome_proposal_custom_fields)
+            end
+          end
+
+          private
+
+          def extract_body_content(name, locale)
+            case name
+            when :private_body
+              extract_private_body(locale)
+            else
+              extract_body(locale)
+            end
+          end
+
+          def extract_private_body(locale)
+            if form_presenter.proposal.private_body.is_a?(Hash) && locale.present?
+              form_presenter.private_body(extras: false, all_locales: locale.present?).with_indifferent_access[locale]
+            else
+              form_presenter.private_body(extras: false)
+            end
+          end
+
+          def extract_body(locale)
+            if form_presenter.proposal.body.is_a?(Hash) && locale.present?
+              form_presenter.body(extras: false, all_locales: locale.present?).with_indifferent_access[locale]
+            else
+              form_presenter.body(extras: false)
+            end
+          end
+
+          def apply_custom_fields(custom_fields, body, form, name)
+            if body.present?
+              custom_fields.apply_xml(body)
+              form.object.errors.add(name, custom_fields.errors) if custom_fields.errors
+            end
           end
         end
       end
